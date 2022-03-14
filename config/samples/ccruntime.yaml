@@ -50,6 +50,7 @@ spec:
     installCmd: ["/opt/kata-artifacts/scripts/kata-deploy.sh", "install"]
     uninstallCmd: ["/opt/kata-artifacts/scripts/kata-deploy.sh", "reset"]
     cleanupCmd: ["/opt/kata-artifacts/scripts/kata-deploy.sh", "cleanup"]
+    preInstallImage: quay.io/fidencio/containerd-for-cc:2022031414141647263693
     cleanupNodeSelector: 
       - matchLabels:
         - name: "katacontainers.io/kata-runtime"

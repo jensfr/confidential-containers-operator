@@ -158,12 +158,10 @@ type CcInstallConfig struct {
 	InstallCmd []string `json:"installCmd,omitempty"`
 
 	// This specifies the command for uninstallation of the runtime on the nodes
-	// +optional
-	UninstallCmd []string `json:"uninstallCmd,omitempty"`
+	UninstallCmd []string `json:"uninstallCmd"`
 
 	// This specifies the command for cleanup on the nodes
-	// +optional
-	CleanupCmd []string `json:"cleanupCmd,omitempty"`
+	CleanupCmd []string `json:"cleanupCmd"`
 
 	// This specifies a node selector to define which nodes to install on
 	// +optional
@@ -172,6 +170,22 @@ type CcInstallConfig struct {
 	// This specifies the environment variables required by the daemon set
 	// +optional
 	EnvironmentVariables []corev1.EnvVar `json:"environmentVariables,omitempty"`
+
+	// This specifies the command executes before InstallCmd
+	// +optional
+	PreinstallCmd []string `json:"preinstallCmd,omitempty"`
+
+	// This specifies the image for the pre-install scripts
+	// +optional
+	PreInstallImage string `json:"preInstallImage,omitempty"`
+
+	// This specifies the env variables for the pre-install daemon set
+	// +optional
+	PreInstallEnvironmentVariables []corev1.EnvVar `json:"preInstallEnvironmentVariables,omitempty"`
+
+	// This specifies the volumeMounts for the pre-install daemon set
+	// +optional
+	PreInstallVolumeMounts []corev1.VolumeMount `json:"preInstallVolumeMounts,omitempty"`
 }
 
 // CcInstallationStatus reflects the status of the ongoing confidential containers runtime installation

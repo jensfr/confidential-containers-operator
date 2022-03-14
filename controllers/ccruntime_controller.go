@@ -106,7 +106,7 @@ func (r *CcRuntimeReconciler) processCcRuntimeDeleteRequest() (ctrl.Result, erro
 		installDsNamespace := "confidential-containers-system"
 		err := r.Client.Get(context.TODO(), types.NamespacedName{Name: installDsName, Namespace: installDsNamespace}, installDs)
 		if err != nil {
-			if errors.IsNotFound(err) {
+			if errors.IsNotFound(err) || errors.IsGone(err) {
 				// Check for nodes with label set by install DS prestop hook.
 				// If no nodes exist then remove finalizer and reconcile
 				err, nodes := r.getNodesWithLabels(map[string]string{"katacontainers.io/kata-runtime": "cleanup"})
@@ -181,6 +181,28 @@ func (r *CcRuntimeReconciler) processCcRuntimeInstallRequest() (ctrl.Result, err
 		}
 	}
 
+	// if ds exists, get all labels
+	err, nodes := r.getNodesWithLabels(map[string]string{"cc-preinstall/done": "true"})
+	if err != nil {
+		r.Log.Info("couldn't GET labelled nodes")
+		return ctrl.Result{}, err
+	}
+
+	//FIXME make sure cc-preinstall/done labels are deleted during uninstall
+	r.Log.Info("preinstall image2", "r.ccRuntime.Spec.Config.PreInstallImage", r.ccRuntime.Spec.Config.PreInstallImage)
+	if r.ccRuntime.Spec.Config.PreInstallImage != "" &&
+		len(nodes.Items) < r.ccRuntime.Status.TotalNodesCount &&
+		r.ccRuntime.Status.TotalNodesCount > 0 {
+		r.Log.Info("inside != nil check")
+		preInstallDs := r.processHookDaemonset("pre-install")
+		r.Log.Info("ds = ", "daemonset", preInstallDs)
+		// get daemonset
+		res, err := r.handlePrePostDs(preInstallDs, map[string]string{"cc-preinstall/done": "true"})
+		if res.Requeue == true {
+			return res, err
+		}
+	}
+
 	// Don't create the daemonset if the runtime is already installed on the cluster nodes
 	if r.ccRuntime.Status.TotalNodesCount > 0 &&
 		r.ccRuntime.Status.InstallationStatus.Completed.CompletedNodesCount != r.ccRuntime.Status.TotalNodesCount {
@@ -213,7 +235,7 @@ func (r *CcRuntimeReconciler) processCcRuntimeInstallRequest() (ctrl.Result, err
 		return ctrl.Result{}, err
 	}
 	foundDs := &appsv1.DaemonSet{}
-	err := r.Client.Get(context.TODO(), types.NamespacedName{Name: ds.Name, Namespace: ds.Namespace}, foundDs)
+	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: ds.Name, Namespace: ds.Namespace}, foundDs)
 	if err != nil && errors.IsNotFound(err) {
 		r.Log.Info("Creating cleanup Daemonset", "ds.Namespace", ds.Namespace, "ds.Name", ds.Name)
 		err = r.Client.Create(context.TODO(), ds)
@@ -232,6 +254,42 @@ func (r *CcRuntimeReconciler) processCcRuntimeInstallRequest() (ctrl.Result, err
 		}
 	}
 
+	return ctrl.Result{}, nil
+}
+
+func (r *CcRuntimeReconciler) handlePrePostDs(preInstallDs *appsv1.DaemonSet, doneLabel map[string]string) (
+	ctrl.Result, error,
+) {
+	foundPreinstallDs := &appsv1.DaemonSet{}
+	err := r.Client.Get(context.TODO(), types.NamespacedName{Name: preInstallDs.Name, Namespace: preInstallDs.Namespace}, foundPreinstallDs)
+	if err != nil && errors.IsNotFound(err) {
+		r.Log.Info("create preinstall DS")
+		//create Ds
+		err = r.Client.Create(context.TODO(), preInstallDs)
+		if err != nil {
+			r.Log.Info("failed to create preinstall DS")
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, err
+		}
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, nil
+	} else if err != nil {
+		r.Log.Info("couldn't GET preinstall DS")
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, err
+	}
+	// if ds exists, get all labels
+	err, nodes := r.getNodesWithLabels(doneLabel)
+	if err != nil {
+		r.Log.Info("couldn't GET labelled nodes")
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, err
+	}
+	if len(nodes.Items) < r.ccRuntime.Status.TotalNodesCount {
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, err
+	}
+	err = r.Client.Delete(context.TODO(), foundPreinstallDs)
+	if err != nil {
+		r.Log.Info("couldn't DELETE labelled nodes")
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, err
+	}
+	r.Log.Info("deleted DS")
 	return ctrl.Result{}, nil
 }
 
@@ -385,7 +443,7 @@ func (r *CcRuntimeReconciler) processDaemonset(operation DaemonOperation) *appsv
 
 	if operation == UninstallOperation {
 		containerCommand = r.ccRuntime.Spec.Config.UninstallCmd
-		nodeSelector = r.ccRuntime.Spec.Config.CleanupNodeSelector.MatchLabels
+		//nodeSelector = r.ccRuntime.Spec.Config.CleanupNodeSelector.MatchLabels
 	}
 
 	return &appsv1.DaemonSet{
@@ -473,4 +531,84 @@ func (r *CcRuntimeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ccv1beta1.CcRuntime{}).
 		Complete(r)
+}
+
+func (r *CcRuntimeReconciler) processHookDaemonset(operation string) *appsv1.DaemonSet {
+	runPrivileged := true
+	var runAsUser int64 = 0
+
+	dsName := "cc-operator-preinstall-daemon"
+	dsLabelSelectors := map[string]string{
+		"name": dsName,
+	}
+
+	r.Log.Info("processHookDaemonset")
+
+	var nodeSelector map[string]string
+	if r.ccRuntime.Spec.CcNodeSelector != nil {
+		nodeSelector = r.ccRuntime.Spec.CcNodeSelector.MatchLabels
+	} else {
+		nodeSelector = map[string]string{
+			"node-role.kubernetes.io/worker": "",
+		}
+	}
+
+	return &appsv1.DaemonSet{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       "DaemonSet",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dsName,
+			Namespace: "confidential-containers-system",
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: dsLabelSelectors,
+			},
+			UpdateStrategy: appsv1.DaemonSetUpdateStrategy{
+				Type: "RollingUpdate",
+				RollingUpdate: &appsv1.RollingUpdateDaemonSet{
+					MaxUnavailable: &intstr.IntOrString{
+						Type:   intstr.Int,
+						IntVal: 1,
+					},
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: dsLabelSelectors,
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "cc-operator-controller-manager",
+					NodeSelector:       nodeSelector,
+					Containers: []corev1.Container{
+						{
+							Name:            "cc-runtime-" + operation + "-pod",
+							Image:           r.ccRuntime.Spec.Config.PreInstallImage,
+							ImagePullPolicy: "Always",
+							SecurityContext: &corev1.SecurityContext{
+								Privileged: &runPrivileged,
+								RunAsUser:  &runAsUser,
+							},
+							//FIXME add pre/post install cmd constants
+							Command: []string{"/bin/sh", "-c", "/opt/confidential-containers/scripts/" + operation + ".sh"},
+							Env: []corev1.EnvVar{
+								{
+									Name: "NODE_NAME",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "spec.nodeName",
+										},
+									},
+								},
+							},
+							VolumeMounts: r.ccRuntime.Spec.Config.PreInstallVolumeMounts,
+						},
+					},
+					Volumes: r.ccRuntime.Spec.Config.InstallerVolumes,
+				},
+			},
+		},
+	}
 }
