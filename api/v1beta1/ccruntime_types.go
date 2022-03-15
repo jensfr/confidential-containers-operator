@@ -186,6 +186,9 @@ type CcInstallConfig struct {
 	// This specifies the volumeMounts for the pre-install daemon set
 	// +optional
 	PreInstallVolumeMounts []corev1.VolumeMount `json:"preInstallVolumeMounts,omitempty"`
+
+	PostUninstallImage string          `json:"postUninstallImage,omitempty"`
+	PreInstallVolumes  []corev1.Volume `json:"preInstallVolumes,omitempty"`
 }
 
 // CcInstallationStatus reflects the status of the ongoing confidential containers runtime installation

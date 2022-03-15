@@ -604,7 +604,7 @@ func (r *CcRuntimeReconciler) processHookDaemonset(operation string) *appsv1.Dae
 							VolumeMounts: r.ccRuntime.Spec.Config.PreInstallVolumeMounts,
 						},
 					},
-					Volumes: r.ccRuntime.Spec.Config.InstallerVolumes,
+					Volumes: r.ccRuntime.Spec.Config.PreInstallVolumes,
 				},
 			},
 		},
