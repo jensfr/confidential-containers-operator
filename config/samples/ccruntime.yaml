@@ -50,7 +50,35 @@ spec:
     installCmd: ["/opt/kata-artifacts/scripts/kata-deploy.sh", "install"]
     uninstallCmd: ["/opt/kata-artifacts/scripts/kata-deploy.sh", "reset"]
     cleanupCmd: ["/opt/kata-artifacts/scripts/kata-deploy.sh", "cleanup"]
-    preInstallImage: quay.io/fidencio/containerd-for-cc:2022031414141647263693
+    #preInstallImage: quay.io/jensfr/preinstall-kata-deploy:test
+    preInstallImage: quay.io/fidencio/containerd-for-cc:2022031600021647385343
+    preInstallVolumeMounts:
+      - mountPath: /var/run/dbus
+        name: dbus
+      - mountPath: /run/systemd
+        name: systemd
+      - mountPath: /opt/confidential-containers/scripts/
+        name: confidential-containers-scripts
+      - mountPath: /opt/confidential-containers-artifacts/
+        name: confidential-containers-artifacts
+    preInstallVolumes:
+      - hostPath:
+          path: /var/run/dbus
+          type: ""
+        name: dbus
+      - hostPath:
+          path: /run/systemd
+          type: ""
+        name: systemd
+      - hostPath:
+          path: /opt/confidential-containers/scripts/
+          type: DirectoryOrCreate
+        name: confidential-containers-scripts
+      - hostPath:
+          path: /opt/confidential-containers-artifacts/
+          type: DirectoryOrCreate
+        name: confidential-containers-artifacts
+    postUninstallImage: quay.io/jensfr/postuninstall-kata-deploy:test2
     cleanupNodeSelector: 
       - matchLabels:
         - name: "katacontainers.io/kata-runtime"

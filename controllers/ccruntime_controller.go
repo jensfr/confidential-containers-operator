@@ -88,7 +88,21 @@ func (r *CcRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// indicated by the deletion timestamp being set.
 	if r.ccRuntime.GetDeletionTimestamp() != nil {
 		r.Log.Info("ccRuntime instance marked deleted")
-		return r.processCcRuntimeDeleteRequest()
+		res, err := r.processCcRuntimeDeleteRequest()
+		if err != nil || res.Requeue {
+			r.Log.Info("error or requeue from processCcRuntimeDeleteRequest")
+			return res, err
+		}
+		if r.ccRuntime.Spec.Config.PostUninstallImage != "" {
+			r.Log.Info("calling handlePostUninstall")
+			err, res := handlePostUninstall(r)
+			{
+				if err != nil && res.Requeue {
+					r.Log.Info("error or requeue from handlePostUninstall")
+					return res, err
+				}
+			}
+		}
 	}
 
 	return r.processCcRuntimeInstallRequest()
@@ -130,7 +144,7 @@ func (r *CcRuntimeReconciler) processCcRuntimeDeleteRequest() (ctrl.Result, erro
 			r.Log.Error(err, "Error in getting Install Daemonset")
 			return ctrl.Result{}, err
 		} else {
-			err = r.Client.Delete(context.TODO(), installDs)
+			err := r.Client.Delete(context.TODO(), installDs)
 			if err != nil {
 				r.Log.Error(err, "Error in deleting Install Daemonset")
 				return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, nil
@@ -140,6 +154,31 @@ func (r *CcRuntimeReconciler) processCcRuntimeDeleteRequest() (ctrl.Result, erro
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+func handlePostUninstall(r *CcRuntimeReconciler) (error, ctrl.Result) {
+	err, nodes := r.getNodesWithLabels(map[string]string{"cc-postuninstall/done": "true"})
+	if err != nil {
+		r.Log.Info("couldn't GET labelled nodes")
+		return err, ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}
+	}
+
+	r.Log.Info("postuninstall image2", "r.ccRuntime.Spec.Config.PostUninstallImage",
+		r.ccRuntime.Spec.Config.PostUninstallImage)
+
+	if r.ccRuntime.Spec.Config.PostUninstallImage != "" &&
+		len(nodes.Items) < r.ccRuntime.Status.TotalNodesCount &&
+		r.ccRuntime.Status.TotalNodesCount > 0 {
+		r.Log.Info("inside != nil check")
+		postUninstallDs := r.processHookDaemonset("post-uninstall")
+		r.Log.Info("ds = ", "daemonset", postUninstallDs)
+		// get daemonset
+		res, err := r.handlePrePostDs(postUninstallDs, map[string]string{"cc-postuninstall/done": "true"})
+		if res.Requeue == true {
+			return err, res
+		}
+	}
+	return err, ctrl.Result{}
 }
 
 func (r *CcRuntimeReconciler) processCcRuntimeInstallRequest() (ctrl.Result, error) {
@@ -263,16 +302,16 @@ func (r *CcRuntimeReconciler) handlePrePostDs(preInstallDs *appsv1.DaemonSet, do
 	foundPreinstallDs := &appsv1.DaemonSet{}
 	err := r.Client.Get(context.TODO(), types.NamespacedName{Name: preInstallDs.Name, Namespace: preInstallDs.Namespace}, foundPreinstallDs)
 	if err != nil && errors.IsNotFound(err) {
-		r.Log.Info("create preinstall DS")
+		r.Log.Info("create preinstall/postuninstall DS")
 		//create Ds
 		err = r.Client.Create(context.TODO(), preInstallDs)
 		if err != nil {
-			r.Log.Info("failed to create preinstall DS")
+			r.Log.Info("failed to create preinstall/postuninstall DS")
 			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, err
 		}
 		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, nil
 	} else if err != nil {
-		r.Log.Info("couldn't GET preinstall DS")
+		r.Log.Info("couldn't GET preinstall/postuninstall DS")
 		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, err
 	}
 	// if ds exists, get all labels
@@ -532,14 +571,22 @@ func (r *CcRuntimeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *CcRuntimeReconciler) processHookDaemonset(operation string) *appsv1.DaemonSet {
-	runPrivileged := true
+	var runPrivileged = true
 	var runAsUser int64 = 0
+	var image string = ""
 
-	dsName := "cc-operator-preinstall-daemon"
+	dsName := "cc-operator-" + operation + "-daemon"
 	dsLabelSelectors := map[string]string{
 		"name": dsName,
 	}
 
+	if operation == "post-uninstall" {
+		image = r.ccRuntime.Spec.Config.PostUninstallImage
+	} else if operation == "pre-install" {
+		image = r.ccRuntime.Spec.Config.PreInstallImage
+	} else {
+		image = "invalid image"
+	}
 	r.Log.Info("processHookDaemonset")
 
 	var nodeSelector map[string]string
@@ -583,14 +630,14 @@ func (r *CcRuntimeReconciler) processHookDaemonset(operation string) *appsv1.Dae
 					Containers: []corev1.Container{
 						{
 							Name:            "cc-runtime-" + operation + "-pod",
-							Image:           r.ccRuntime.Spec.Config.PreInstallImage,
+							Image:           image,
 							ImagePullPolicy: "Always",
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: &runPrivileged,
 								RunAsUser:  &runAsUser,
 							},
 							//FIXME add pre/post install cmd constants
-							Command: []string{"/bin/sh", "-c", "/opt/confidential-containers/scripts/" + operation + ".sh"},
+							Command: []string{"/bin/sh", "-c", "/opt/confidental-containers/scripts/" + operation + ".sh"},
 							Env: []corev1.EnvVar{
 								{
 									Name: "NODE_NAME",
