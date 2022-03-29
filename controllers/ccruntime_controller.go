@@ -133,9 +133,9 @@ func (r *CcRuntimeReconciler) processCcRuntimeDeleteRequest() (ctrl.Result, erro
 			err = r.Client.Delete(context.TODO(), installDs)
 			if err != nil {
 				r.Log.Error(err, "Error in deleting Install Daemonset")
-				return ctrl.Result{}, err
-			} else {
 				return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, nil
+			} else {
+				return ctrl.Result{}, err
 			}
 		}
 	}
@@ -227,8 +227,8 @@ func (r *CcRuntimeReconciler) processCcRuntimeInstallRequest() (ctrl.Result, err
 
 	// Add finalizer for this CR
 	if !contains(r.ccRuntime.GetFinalizers(), RuntimeConfigFinalizer) {
-		if err := r.addFinalizer(); err != nil {
-			return ctrl.Result{}, err
+		if res, err := r.addFinalizer(); err != nil {
+			return res, err
 		}
 	}
 
@@ -529,7 +529,7 @@ func (r *CcRuntimeReconciler) processDaemonset(operation DaemonOperation) *appsv
 	}
 }
 
-func (r *CcRuntimeReconciler) addFinalizer() error {
+func (r *CcRuntimeReconciler) addFinalizer() (ctrl.Result, error) {
 	r.Log.Info("Adding Finalizer for the RuntimeConfig")
 	controllerutil.AddFinalizer(r.ccRuntime, RuntimeConfigFinalizer)
 
@@ -537,9 +537,9 @@ func (r *CcRuntimeReconciler) addFinalizer() error {
 	err := r.Client.Update(context.TODO(), r.ccRuntime)
 	if err != nil {
 		r.Log.Error(err, "Failed to update ccRuntime with finalizer")
-		return err
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, err
 	}
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // Get Nodes container specific labels
